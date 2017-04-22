@@ -94,11 +94,13 @@ __device__ float microfacet_dist(float3 m, float3 n, float alpha)
 	return numer / denom;  
 } 
 // Calculates proportion of microfacets that are masked or shadowed  
-__device__ float geometric_atten(float3 v, float3 l, float h) 
+__device__ float geometric_atten(float3 v, float3 l, float3 n)
 {
+	float h = norm(v + l);  
+	float view = (2 * dot(n, h) * dot(n, v)) / dot(v,h); 
+	float light = (2 * dot(n, h) * dot(n, l)) / dot(l, h);
 
-
-
+	return min(1, view, light);
 }
 
 // Compute the Cook-Torrance BRDF
