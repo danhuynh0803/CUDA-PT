@@ -68,14 +68,21 @@ __device__ float3 uniform_sample_hemisphere(const float &r1, const float &r2) {
 	return make_float3(x, r1, z);
 }
 
-// Calculates fresnel coefficient 
-__device__ float fresnel(float3 L, float h)   
+__device__ float reflect_coeff(float n1, float n2)
 {
-	
+	float f0 = ( (n1 - n2) / (n1 + n2) );  
+	return f0 * f0;  
+}
+
+// Calculates fresnel coefficient 
+__device__ float fresnel(float3 l, float3 norm,  float n1, float n2)   
+{
+	float f0 = reflect_coeff(n1, n2); 
+	return f0 + (1 - f0)*pow(1 - dot(l, norm), 5); 
 }
 
 // Calculates proportion of microfacets pointing in direction of half-vector h
-__device__ float microfacet_dist(float m, float n, float alpha) 
+__device__ float microfacet_dist(float3 m, float3 n, float alpha) 
 {
 	float cos_m = dot(m, n); 
 	float tan_m = ( (1 - cos_m*cos_m) /cos_m ); 
@@ -89,6 +96,8 @@ __device__ float microfacet_dist(float m, float n, float alpha)
 // Calculates proportion of microfacets that are masked or shadowed  
 __device__ float geometric_atten(float3 v, float3 l, float h) 
 {
+
+
 
 }
 
