@@ -68,6 +68,31 @@ __device__ float3 uniform_sample_hemisphere(const float &r1, const float &r2) {
 	return make_float3(x, r1, z);
 }
 
+// Calculates fresnel coefficient 
+__device__ float fresnel(float fo) 
+{
+	
+}
+
+// Calculates proportion of microfacets pointing in direction of half-vector h
+__device__ float microfacet_dist(float alpha_rough) 
+{
+
+}
+// Calculates proportion of microfacets that are masked or shadowed  
+__device__ float geometric_atten(float3 n, float3 v, float3 l) 
+{
+
+}
+
+// Compute the Cook-Torrance BRDF
+__device__ float ct_brdf() 
+{
+
+}
+
+
+
 // Radiance function, solves rendering equations 
 __device__ float3 radiance(Ray &r, unsigned int *s1, unsigned int *s2) { 
 	float3 accucolor = make_float3(0.0f, 0.0f, 0.0f);
