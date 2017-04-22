@@ -1,3 +1,6 @@
+// (Attempting) pbr pt in CUDA by Danny Huynh, 2017
+// Based on smallptCUDA by Sam Lapere, 2015 
+
 #include <iostream>
 #include "gputimer.h"
 #include <device_launch_parameters.h>
@@ -88,6 +91,16 @@ __device__ float3 radiance(Ray &r, unsigned int *s1, unsigned int *s2) {
 	}
 }
 
+__global__ void render_kernel(float3* output_d) 
+{
+
+}
+
+// Clamp values to be in range [0.0, 1.0]
+inline float clamp(float x) { return x < 0.0f? 0.0f : x > 1.0f? 1.0f : x; }
+// Converts RGB float in range [0, 1] to int range [0, 255], while performing gamma correction
+inline int toInt(float x) { return int(pow(clamp(x), 1 / 2.2) * 255 + .5); } 
+
 int main()
 {
 	GpuTimer timer; 
@@ -99,12 +112,33 @@ int main()
 	cudaMalloc(&output_d, width * height * sizeof(float3));
 
 	// specify the block and grid size for CUDA threads over SMs 
+	dim3 block(8, 8, 1); 
+	dim3 grid(width / block.x, height / block.y, 1); 
 
-	timer.Start(); 
+	timer.Start();
 	// Launch 
+	render_kernel <<< grid, block >>> (output_d); 
 	timer.Stop(); 
 
+	cudaMemcpy(output_h, output_d, width * height * sizeof(float3), cudaMemcpyDeviceToHost);
 	printf("GPU Processing Time: %g ms\n", timer.Elapsed());
+
+	// Free any allocated memory on GPU
+	cudaFree(output_d); 
+
+	// Write to a ppm file 
+	FILE *myFile = fopen("pt.ppm", "w"); 
+	fprintf(myFile, "P3\n%d %d\n %d\n", width, height, 255); 
+	for (int i = 0; i < width * height; ++i) 
+	{ 
+		fprintf(myFile, "%d %d %d ", toInt(output_h[i].x),
+									 toInt(output_h[i].y), 
+									 toInt(output_h[i].z));
+
+	}
+
+	// Free allocated memory on CPU
+	delete[] output_h; 
 
 	return 0;
 }
