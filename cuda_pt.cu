@@ -109,7 +109,7 @@ __device__ float geometric_atten(float3 v, float3 l, float3 n)
 }
 
 // Compute the Cook-Torrance BRDF
-__device__ float ct_brdf(float3 norm, float3 l) 
+__device__ float ct_brdf(const float3 norm, float3 &l) 
 {
 	// Sample unit hemisphere 
 	float r1 = r2 = 0.5f; 
@@ -126,7 +126,9 @@ __device__ float ct_brdf(float3 norm, float3 l)
 	float G = geometric_atten(v, l, n);
 	
 	float fr = (F * D * G) / (4 * dot(l, norm) * dot(v, norm));  
-			
+	
+	// Set the sampled light direction as the new incident light direction
+	l = sampleLightDir;	
 }
 
 
@@ -149,9 +151,14 @@ __device__ float3 radiance(Ray &r, unsigned int *s1, unsigned int *s2) {
 		float3 n = normalize(p - hit.pos); 
 		float3 nl = dot(n, r.dir) < 0? n : n*-1;  // Flip normal if not facing camera
 
+		accucolor += mask * hit.emission;
+
 		// Calculate the Cook-Torrance BRDF 
 		float brdf = ct_brdf(n, r.dir); 
 		
+		// Apply hit object's albedo
+		mask *= hit.albedo; 
+
 		// Accumulate color 			
 		accucolor += brdf * (hit.emission + hit.albedo);
 	}
@@ -168,10 +175,12 @@ __global__ void render_kernel(float3* output_d)
 	Ray cam(look_from, look_at);
 
 	// Calculate the pixel color at the location 
-	Ray lightDir(cam.orig, make_float(x * cam.dir.x, y * cam.dir.y, cam.dir.z)); 
+	Ray light_dir(cam.orig, make_float3(x * cam.dir.x, y * cam.dir.y, cam.dir.z)); 
+	float3 pixel_color = radiance(light_dir, x, y); 
+	float3 pixel_color /= samples; 
 
-
-	// Convert 2D to  1D 	
+	// Convert 2D to 1D 	
+	output_d[x*y + x] = pixel_color;
 }
 
 // Clamp values to be in range [0.0, 1.0]
