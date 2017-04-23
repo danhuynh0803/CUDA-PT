@@ -16,7 +16,7 @@
 #define alpha 0.5 
 
 // Other settings 
-#define CTBRDF   // Uncomment to use the Cook-Torrance reflectance model
+//#define CTBRDF   // Uncomment to use the Cook-Torrance reflectance model
 
 struct Ray { 
 	float3 orig; 
@@ -222,13 +222,17 @@ __device__ float3 radiance(Ray &r, unsigned int *s1, unsigned int *s2)
 		float D = microfacet_dist(r.dir, n);
 		float G = geometric_atten(r.dir, d, n);
 		float fr = (F * D * G) / (4 * dot(d, n) * dot(r.dir, n));
-		mask *= fr;
-		// ==============
-#endif
+		
+		float ref_coeff = 0.2;
 
+		mask *= hit.albedo * dot(d, nl) * (ref_coeff + fr * (1.0 - ref_coeff));
+		mask *= 2;
+		// ==============
+#else 
 		mask *= hit.albedo;    // multiply with colour of object
 		mask *= dot(d, nl);  // weigh light contribution using cosine of angle between incident light and normal
 		mask *= 2;          // fudge factor
+#endif 
 	}
 		
 	return accucolor; 
