@@ -13,6 +13,11 @@
 #define height 384
 #define samps 1024
 
+#define alpha 0.5 
+
+const float3 look_from(0, 0, 0); 
+const float3 look_at(0, 0, 0);
+
 struct Ray { 
 	float3 orig; 
 	float3 dir; 
@@ -104,9 +109,24 @@ __device__ float geometric_atten(float3 v, float3 l, float3 n)
 }
 
 // Compute the Cook-Torrance BRDF
-__device__ float ct_brdf() 
+__device__ float ct_brdf(float3 norm, float3 l) 
 {
-
+	// Sample unit hemisphere 
+	float r1 = r2 = 0.5f; 
+	float3 sampleLightDir = uniform_sample_hemisphere(r1, r2);	
+		
+	// Check which object our new light direction hits 
+	 
+			
+	// get Fresnel 
+	float F = fresnel(l, norm, 1.0f, 1.2f);  
+	// get D 
+	float D = microfacet_dist(0.0f, n, alpha);
+	// get G 
+	float G = geometric_atten(v, l, n);
+	
+	float fr = (F * D * G) / (4 * dot(l, norm) * dot(v, norm));  
+			
 }
 
 
@@ -128,15 +148,30 @@ __device__ float3 radiance(Ray &r, unsigned int *s1, unsigned int *s2) {
 		float3 p = r.orig + r.dir*t; 
 		float3 n = normalize(p - hit.pos); 
 		float3 nl = dot(n, r.dir) < 0? n : n*-1;  // Flip normal if not facing camera
+
+		// Calculate the Cook-Torrance BRDF 
+		float brdf = ct_brdf(n, r.dir); 
 		
-
-
+		// Accumulate color 			
+		accucolor += brdf * (hit.emission + hit.albedo);
 	}
+	
+	return accucolor; 
 }
 
 __global__ void render_kernel(float3* output_d) 
 {
+	int x = blockId.x * blockDim.x + threadIdx.x; 
+	int y = blockId.y * blockDim.y + threadIdx.y; 
 
+	// Set camera
+	Ray cam(look_from, look_at);
+
+	// Calculate the pixel color at the location 
+	Ray lightDir(cam.orig, make_float(x * cam.dir.x, y * cam.dir.y, cam.dir.z)); 
+
+
+	// Convert 2D to  1D 	
 }
 
 // Clamp values to be in range [0.0, 1.0]
