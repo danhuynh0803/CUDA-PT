@@ -13,8 +13,10 @@
 #define width 1024
 #define height 720
 #define samples 1024
-
 #define alpha 0.5 
+
+// Other settings 
+#define CTBRDF   // Uncomment to use the Cook-Torrance reflectance model
 
 struct Ray { 
 	float3 orig; 
@@ -60,7 +62,7 @@ __constant__ Sphere spheres[] =
 
 
 // check speeds if done inline
-__device__ bool intersect_scene(const Ray &r, float &t, int &id) {
+__device__ inline bool intersect_scene(const Ray &r, float &t, int &id) {
 	float n = sizeof(spheres)/sizeof(Sphere);  
 	float d, inf = t = FLT_MAX;
 	
@@ -138,10 +140,14 @@ __device__ float geometric_atten(float3 v, float3 l, float3 n)
 }
 
 // Compute the Cook-Torrance BRDF
-__device__ float ct_brdf(const float3 norm, float3 &l, const float3 nl) 
+__device__ float ct_brdf(const float3 norm, float3 &l, const float3 nl, unsigned int *s1, unsigned int *s2) 
 {
 	// Sample unit hemisphere 
-	float r1 = 0.5f, r2 = 0.5f; 
+	// create 2 random numbers
+	float r1 = 2 * M_PI * getrandom(s1, s2); // pick random number on unit circle (radius = 1, circumference = 2*Pi) for azimuth
+	float r2 = getrandom(s1, s2);  // pick random number for elevation
+	float r2s = sqrtf(r2);
+
 	float3 sampleLightDir = uniform_sample_hemisphere(r1, r2);	
 	
 	// Compute local orthonormal bases uvw at hitpoint to use for calculating random ray direction
@@ -162,11 +168,15 @@ __device__ float ct_brdf(const float3 norm, float3 &l, const float3 nl)
 	
 	// Set the sampled light direction as the new incident light direction
 	l = sampleLightDir;	
+
+	return fr;
 }
 
 
-// Radiance function, solves rendering equations 
-__device__ float3 radiance(Ray &r, unsigned int *s1, unsigned int *s2) { 
+
+// Radiance function, solves rendering equation
+__device__ float3 radiance(Ray &r, unsigned int *s1, unsigned int *s2) 
+{ 
 	float3 accucolor = make_float3(0.0f, 0.0f, 0.0f);
 	float3 mask = make_float3(1.0f, 1.0f, 1.0f);
 
@@ -204,10 +214,22 @@ __device__ float3 radiance(Ray &r, unsigned int *s1, unsigned int *s2) {
 		r.orig = p + nl*0.05f; // offset ray origin slightly to prevent self intersection
 		r.dir = d;
 
+#ifdef CTBRDF
+		// ============== 
+		// CT-BRDF
+		//
+		float F = fresnel(r.dir, n, 1.0f, 1.2f);
+		float D = microfacet_dist(r.dir, n);
+		float G = geometric_atten(r.dir, d, n);
+		float fr = (F * D * G) / (4 * dot(d, n) * dot(r.dir, n));
+		mask *= fr;
+		// ==============
+#endif
+
 		mask *= hit.albedo;    // multiply with colour of object
 		mask *= dot(d, nl);  // weigh light contribution using cosine of angle between incident light and normal
 		mask *= 2;          // fudge factor
- }
+	}
 		
 	return accucolor; 
 }
@@ -263,7 +285,7 @@ int main()
 	cudaMalloc(&output_d, width * height * sizeof(float3));
 
 	// specify the block and grid size for CUDA threads over SMs 
-	dim3 block(8, 8, 1); 
+	dim3 block(16, 16, 1); 
 	dim3 grid(width / block.x, height / block.y, 1); 
 
 	timer.Start();
