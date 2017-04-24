@@ -1,7 +1,6 @@
 // (Attempting) pbr pt in CUDA using the Cook-Torrance model by Danny Huynh, 2017
 // Based on smallptCUDA by Sam Lapere, 2015 
 
-
 #include <iostream>
 #include "gputimer.h"
 #include <device_launch_parameters.h>
@@ -10,13 +9,13 @@
 #include "cutil_math.h"
 
 #define M_PI 3.14159265359f  
-#define width 1024
-#define height 720
+#define width 640
+#define height 480
 #define samples 1024
 #define alpha 0.5 
 
 // Other settings 
-//#define CTBRDF   // Uncomment to use the Cook-Torrance reflectance model
+#define CTBRDF   // Uncomment to use the Cook-Torrance reflectance model
 
 struct Ray { 
 	float3 orig; 
@@ -57,7 +56,7 @@ __constant__ Sphere spheres[] =
 	{ 1e5f, { 50.0f, -1e5f + 81.6f, 81.6f }, { 0.0f, 0.0f, 0.0f }, { .75f, .75f, .75f }, DIFF }, //Top
 	{ 16.5f, { 27.0f, 16.5f, 47.0f }, { 0.0f, 0.0f, 0.0f }, { 0.7f, 0.1f, 0.2f }, DIFF }, // small sphere 1
 	{ 16.5f, { 73.0f, 16.5f, 78.0f }, { 0.0f, 0.0f, 0.0f }, { 0.1f, 0.3f, 1.0f }, DIFF }, // small sphere 2
-	{ 600.0f, { 50.0f, 681.6f - .77f, 81.6f }, { 2.0f, 1.8f, 1.6f }, { 0.0f, 0.0f, 0.0f }, DIFF }  // Light
+	{ 600.0f, { 50.0f, 681.6f - .77f, 81.6f }, { 12.0f, 12.8f, 12.6f }, { 0.0f, 0.0f, 0.0f }, DIFF }  // Light
 };
 
 
@@ -93,7 +92,7 @@ __device__ static float getrandom(unsigned int *seed0, unsigned int *seed1) {
 	return (res.f - 2.f) / 2.f;
 }
 
-
+// For Diffuse Materials 
 __device__ float3 uniform_sample_hemisphere(const float &r1, const float &r2) { 
 	// r1 = cos(theta) = y 
 	float sintheta = sqrtf(1 - r1*r1); 
@@ -103,6 +102,13 @@ __device__ float3 uniform_sample_hemisphere(const float &r1, const float &r2) {
 
 	return make_float3(x, r1, z);
 }
+
+// For Specular Materials 
+__device__ float3 reflect_sample_hemisphere(float3 light_dir, float3 norm)
+{
+	return 2 * dot(light_dir, norm) * norm - light_dir;
+}
+
 
 __device__ float reflect_coeff(float n1, float n2)
 {
@@ -177,6 +183,7 @@ __device__ float ct_brdf(const float3 norm, float3 &l, const float3 nl, unsigned
 // Radiance function, solves rendering equation
 __device__ float3 radiance(Ray &r, unsigned int *s1, unsigned int *s2) 
 { 
+	//("In radiance, at x:%d y:%d \n", *s1, *s2);
 	float3 accucolor = make_float3(0.0f, 0.0f, 0.0f);
 	float3 mask = make_float3(1.0f, 1.0f, 1.0f);
 
@@ -223,10 +230,10 @@ __device__ float3 radiance(Ray &r, unsigned int *s1, unsigned int *s2)
 		float G = geometric_atten(r.dir, d, n);
 		float fr = (F * D * G) / (4 * dot(d, n) * dot(r.dir, n));
 		
-		float ref_coeff = 0.2;
+		float diff_coeff = 0.5;
 
-		mask *= hit.albedo * dot(d, nl) * (ref_coeff + fr * (1.0 - ref_coeff));
-		mask *= 2;
+		mask *= hit.albedo * dot(d, nl) * (diff_coeff + fr * (1.0 - diff_coeff));
+		//mask *= 2;
 		// ==============
 #else 
 		mask *= hit.albedo;    // multiply with colour of object
@@ -243,8 +250,8 @@ __global__ void render_kernel(float3* output_d)
 	unsigned int x = blockIdx.x * blockDim.x + threadIdx.x; 
 	unsigned int y = blockIdx.y * blockDim.y + threadIdx.y; 
 
-	unsigned int i = (height - y - 1) * width + x; 
-
+	unsigned int i = clamp((height - y - 1) * width + x, (unsigned int)0, (unsigned int) (width * height - 1));
+	//printf("current pixel: %d\n", i);
 	unsigned int s1 = x; 
 	unsigned int s2 = y;
 
@@ -267,7 +274,7 @@ __global__ void render_kernel(float3* output_d)
 		// Forced camera rays to be pushed forward to start in interior ^^
 	}
 
-
+	//printf("after radiance: %d\n", i);
 	// Convert 2D to 1D
 	output_d[i] = make_float3(clamp(pixel_color.x, 0.0f, 1.0f), clamp(pixel_color.y, 0.0f, 1.0f), clamp(pixel_color.z, 0.0f, 1.0f));
 
@@ -282,11 +289,11 @@ int main()
 {
 	GpuTimer timer; 
 
-	float3* output_h = new float3[width * height]; 
+	float3* output_h = new float3[3 * width * height]; 
 	float3* output_d; 
 
 	// allocate memory to gpu 
-	cudaMalloc(&output_d, width * height * sizeof(float3));
+	cudaMalloc(&output_d, 3 * width * height * sizeof(float3));
 
 	// specify the block and grid size for CUDA threads over SMs 
 	dim3 block(16, 16, 1); 
