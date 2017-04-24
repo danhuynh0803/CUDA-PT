@@ -48,15 +48,15 @@ struct Sphere {
 // { float radius, { float3 position }, { float3 emission }, { float3 colour }, refl_type }
 __constant__ Sphere spheres[] = 
 {
-	{ 1e5f, { 1e5f + 1.0f, 40.8f, 81.6f }, { 0.0f, 0.0f, 0.0f }, { 0.75f, 0.25f, 0.25f }, DIFF }, //Left
-	{ 1e5f, { -1e5f + 99.0f, 40.8f, 81.6f }, { 0.0f, 0.0f, 0.0f }, { .25f, .25f, .75f }, DIFF }, //Rght
-	{ 1e5f, { 50.0f, 40.8f, 1e5f }, { 0.0f, 0.0f, 0.0f }, { .75f, .75f, .75f }, DIFF }, //Back
+	{ 1e5f, { 1e5f + 1.0f, 40.8f, 81.6f }, { 0.0f, 0.0f, 0.0f }, { 0.85f, 0.35f, 0.35f }, SPEC }, //Left
+	{ 1e5f, { -1e5f + 99.0f, 40.8f, 81.6f }, { 0.0f, 0.0f, 0.0f }, { .35f, .35f, .85f }, SPEC}, //Rght
+	{ 1e5f, { 50.0f, 40.8f, 1e5f }, { 0.0f, 0.0f, 0.0f }, { .75f, .75f, .75f }, SPEC }, //Back
 	{ 1e5f, { 50.0f, 40.8f, -1e5f + 600.0f }, { 0.0f, 0.0f, 0.0f }, { 1.00f, 1.00f, 1.00f }, DIFF }, //Frnt
 	{ 1e5f, { 50.0f, 1e5f, 81.6f }, { 0.0f, 0.0f, 0.0f }, { .75f, .75f, .75f }, DIFF }, //Botm
 	{ 1e5f, { 50.0f, -1e5f + 81.6f, 81.6f }, { 0.0f, 0.0f, 0.0f }, { .75f, .75f, .75f }, DIFF }, //Top
-	{ 16.5f, { 27.0f, 16.5f, 47.0f }, { 0.0f, 0.0f, 0.0f }, { 0.7f, 0.1f, 0.2f }, DIFF }, // small sphere 1
-	{ 16.5f, { 73.0f, 16.5f, 78.0f }, { 0.0f, 0.0f, 0.0f }, { 0.1f, 0.3f, 1.0f }, DIFF }, // small sphere 2
-	{ 600.0f, { 50.0f, 681.6f - .77f, 81.6f }, { 12.0f, 12.8f, 12.6f }, { 0.0f, 0.0f, 0.0f }, DIFF }  // Light
+	{ 16.5f, { 27.0f, 16.5f, 47.0f }, { 0.0f, 0.0f, 0.0f }, { 0.9f, 0.9f, 0.8f }, SPEC }, // small sphere 1
+	{ 16.5f, { 73.0f, 16.5f, 78.0f }, { 0.0f, 0.0f, 0.0f }, { 0.1f, 0.3f, 1.0f }, SPEC }, // small sphere 2
+	{ 600.0f, { 50.0f, 681.6f - .77f, 81.6f }, { 50.0f, 52.8f, 52.6f }, { 0.0f, 0.0f, 0.0f }, DIFF }  // Light
 };
 
 
@@ -106,7 +106,7 @@ __device__ float3 uniform_sample_hemisphere(const float &r1, const float &r2) {
 // For Specular Materials 
 __device__ float3 reflect_sample_hemisphere(float3 light_dir, float3 norm)
 {
-	return 2 * dot(light_dir, norm) * norm - light_dir;
+	return light_dir - 2 * dot(light_dir, norm) * norm;
 }
 
 
@@ -213,9 +213,24 @@ __device__ float3 radiance(Ray &r, unsigned int *s1, unsigned int *s2)
 		float3 u = normalize(cross((fabs(w.x) > .1 ? make_float3(0, 1, 0) : make_float3(1, 0, 0)), w));
 		float3 v = cross(w, u);
 
-		// compute random ray direction on hemisphere using polar coordinates
-		// cosine weighted importance sampling (favours ray directions closer to normal direction)
-		float3 d = normalize(u*cos(r1)*r2s + v*sin(r1)*r2s + w*sqrtf(1 - r2));
+		float3 d; 
+		float diff_coeff = 0.5;
+		// Check object's material type
+		if (hit.refl == DIFF) {
+			// compute random ray direction on hemisphere using polar coordinates
+			// cosine weighted importance sampling (favours ray directions closer to normal direction)
+			d = normalize(u*cos(r1)*r2s + v*sin(r1)*r2s + w*sqrtf(1 - r2));
+		}
+		else if (hit.refl == SPEC) {
+			d = reflect_sample_hemisphere(r.dir, n);
+			diff_coeff = 0.2;
+		}
+		else if (hit.refl == REFR) {
+			// TODO
+		}
+		else { // Default at diffuse
+			d = normalize(u*cos(r1)*r2s + v*sin(r1)*r2s + w*sqrtf(1 - r2));
+		}
 
 		// new ray origin is intersection point of previous ray with scene
 		r.orig = p + nl*0.05f; // offset ray origin slightly to prevent self intersection
@@ -230,15 +245,15 @@ __device__ float3 radiance(Ray &r, unsigned int *s1, unsigned int *s2)
 		float G = geometric_atten(r.dir, d, n);
 		float fr = (F * D * G) / (4 * dot(d, n) * dot(r.dir, n));
 		
-		float diff_coeff = 0.5;
-
-		mask *= hit.albedo * dot(d, nl) * (diff_coeff + fr * (1.0 - diff_coeff));
-		//mask *= 2;
+		
+		mask *= diff_coeff * (hit.albedo * dot(d, nl)/M_PI) + (fr * (1.0 - diff_coeff)); 
+		//mask *= hit.albedo * dot(d, nl) * (diff_coeff + fr * (1.0 - diff_coeff));
+		mask *= 5;
 		// ==============
 #else 
 		mask *= hit.albedo;    // multiply with colour of object
 		mask *= dot(d, nl);  // weigh light contribution using cosine of angle between incident light and normal
-		mask *= 2;          // fudge factor
+		//mask *= 2;          // fudge factor
 #endif 
 	}
 		
