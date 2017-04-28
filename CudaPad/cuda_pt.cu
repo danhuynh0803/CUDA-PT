@@ -12,10 +12,20 @@
 #define width 640
 #define height 480
 #define samples 1024
-#define alpha 0.5 
+#define alpha 0.5
 
 // Other settings 
-#define CTBRDF   // Uncomment to use the Cook-Torrance reflectance model
+//#define CTBRDF   // Uncomment to use the Cook-Torrance reflectance model
+//#define GLOBAL   // Uncomment to use only direct lighting
+
+
+// ===============
+// Related to direct lighting and shadowing 
+
+
+
+// ===============
+
 
 struct Ray { 
 	float3 orig; 
@@ -48,15 +58,15 @@ struct Sphere {
 // { float radius, { float3 position }, { float3 emission }, { float3 colour }, refl_type }
 __constant__ Sphere spheres[] = 
 {
-	{ 1e5f, { 1e5f + 1.0f, 40.8f, 81.6f }, { 0.0f, 0.0f, 0.0f }, { 0.85f, 0.35f, 0.35f }, SPEC }, //Left
-	{ 1e5f, { -1e5f + 99.0f, 40.8f, 81.6f }, { 0.0f, 0.0f, 0.0f }, { .35f, .35f, .85f }, SPEC}, //Rght
-	{ 1e5f, { 50.0f, 40.8f, 1e5f }, { 0.0f, 0.0f, 0.0f }, { .75f, .75f, .75f }, SPEC }, //Back
+	{ 1e5f, { 1e5f + 1.0f, 40.8f, 81.6f }, { 0.0f, 0.0f, 0.0f }, { 0.85f, 0.35f, 0.35f }, DIFF }, //Left
+	{ 1e5f, { -1e5f + 99.0f, 40.8f, 81.6f }, { 0.0f, 0.0f, 0.0f }, { .35f, .35f, .85f }, DIFF}, //Rght
+	{ 1e5f, { 50.0f, 40.8f, 1e5f }, { 0.0f, 0.0f, 0.0f }, { .75f, .75f, .75f }, DIFF }, //Back
 	{ 1e5f, { 50.0f, 40.8f, -1e5f + 600.0f }, { 0.0f, 0.0f, 0.0f }, { 1.00f, 1.00f, 1.00f }, DIFF }, //Frnt
 	{ 1e5f, { 50.0f, 1e5f, 81.6f }, { 0.0f, 0.0f, 0.0f }, { .75f, .75f, .75f }, DIFF }, //Botm
 	{ 1e5f, { 50.0f, -1e5f + 81.6f, 81.6f }, { 0.0f, 0.0f, 0.0f }, { .75f, .75f, .75f }, DIFF }, //Top
-	{ 16.5f, { 27.0f, 16.5f, 47.0f }, { 0.0f, 0.0f, 0.0f }, { 0.9f, 0.9f, 0.8f }, SPEC }, // small sphere 1
-	{ 16.5f, { 73.0f, 16.5f, 78.0f }, { 0.0f, 0.0f, 0.0f }, { 0.1f, 0.3f, 1.0f }, SPEC }, // small sphere 2
-	{ 600.0f, { 50.0f, 681.6f - .77f, 81.6f }, { 50.0f, 52.8f, 52.6f }, { 0.0f, 0.0f, 0.0f }, DIFF }  // Light
+	{ 16.5f, { 27.0f, 16.5f, 47.0f }, { 0.0f, 0.0f, 0.0f }, { 0.9f, 0.9f, 0.8f }, DIFF }, // small sphere 1
+	{ 16.5f, { 73.0f, 16.5f, 78.0f }, { 0.0f, 0.0f, 0.0f }, { 0.1f, 0.3f, 1.0f }, DIFF }, // small sphere 2
+	{ 600.0f, { 50.0f, 681.6f - .77f, 81.6f }, { 2.0f, 1.8f, 1.6f }, { 0.0f, 0.0f, 0.0f }, DIFF }  // Light
 };
 
 
@@ -181,14 +191,46 @@ __device__ float ct_brdf(const float3 norm, float3 &l, const float3 nl, unsigned
 
 
 // Radiance function, solves rendering equation
-__device__ float3 radiance(Ray &r, unsigned int *s1, unsigned int *s2) 
-{ 
+__device__ float3 radiance(Ray &r, unsigned int *s1, unsigned int *s2)
+{
 	//("In radiance, at x:%d y:%d \n", *s1, *s2);
 	float3 accucolor = make_float3(0.0f, 0.0f, 0.0f);
 	float3 mask = make_float3(1.0f, 1.0f, 1.0f);
 
 	// ray bounce loop (no Russian Roulette) 
-	for (int bounces = 0; bounces < 4; ++bounces) { 
+
+#ifndef GLOBAL
+	float3 shade = make_float3(0.2f, 0.2f, 0.2f);
+
+	for (int bounces = 0; bounces < 1; ++bounces) {
+		float t; 
+		int id = 0; 
+		if (!intersect_scene(r, t, id)) 
+			return make_float3(0.0f, 0.0f, 0.0f);
+
+		const Sphere &hit = spheres[id];
+		float3 p = r.orig + r.dir*t; 
+		float3 n = normalize(p - hit.pos);
+		float3 nl = dot(n, r.dir) < 0 ? n : n*-1; 
+
+		accucolor += hit.albedo * max(0.0f, dot(r.dir, n));
+
+		float3 d = spheres[8].pos - p;
+		r.orig = p + nl*0.05f; // offset ray origin slightly to prevent self intersection
+		r.dir = d;
+		if (intersect_scene(r, t, id)) { 
+			if (id != 8) { 
+				// Something blocking
+				accucolor *= shade; 
+			}
+		} 	
+	}
+
+
+#else 
+	int TotalBounces = 4; 
+
+	for (int bounces = 0; bounces < TotalBounces; ++bounces) { 
 		float t ; 
 		int id = 0; 
 		// if no intersection, then return black
@@ -201,6 +243,7 @@ __device__ float3 radiance(Ray &r, unsigned int *s1, unsigned int *s2)
 		float3 nl = dot(n, r.dir) < 0? n : n*-1;  // Flip normal if not facing camera
 
 		// Add emission of current sphere to accumulated color 
+
 		accucolor += mask * hit.emis;  // First term in rendering equation sum
 		// create 2 random numbers
 		float r1 = 2 * M_PI * getrandom(s1, s2); // pick random number on unit circle (radius = 1, circumference = 2*Pi) for azimuth
@@ -245,18 +288,18 @@ __device__ float3 radiance(Ray &r, unsigned int *s1, unsigned int *s2)
 		float G = geometric_atten(r.dir, d, n);
 		float fr = (F * D * G) / (4 * dot(d, n) * dot(r.dir, n));
 		
-		
 		mask *= diff_coeff * (hit.albedo * dot(d, nl)/M_PI) + (fr * (1.0 - diff_coeff)); 
 		//mask *= hit.albedo * dot(d, nl) * (diff_coeff + fr * (1.0 - diff_coeff));
-		mask *= 5;
+		mask *= 2;
 		// ==============
 #else 
 		mask *= hit.albedo;    // multiply with colour of object
 		mask *= dot(d, nl);  // weigh light contribution using cosine of angle between incident light and normal
-		//mask *= 2;          // fudge factor
-#endif 
+		mask *= 2;          // fudge factor
+#endif // CTBRDF or not
 	}
-		
+
+#endif // Direct vs Global Illumination
 	return accucolor; 
 }
 
