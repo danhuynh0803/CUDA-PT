@@ -200,28 +200,39 @@ __device__ float3 radiance(Ray &r, unsigned int *s1, unsigned int *s2)
 	// ray bounce loop (no Russian Roulette) 
 
 #ifndef GLOBAL
-	float3 shade = make_float3(0.2f, 0.2f, 0.2f);
+	accucolor = make_float3(1.0f, 1.0f, 1.0f);
+	float3 shade = make_float3(0.1f, 0.1f, 0.1f);
 
 	for (int bounces = 0; bounces < 1; ++bounces) {
 		float t; 
 		int id = 0; 
-		if (!intersect_scene(r, t, id)) 
-			return make_float3(0.0f, 0.0f, 0.0f);
+		if (!intersect_scene(r, t, id))
+			return make_float3(0.0, 0.0f, 0.0f);
 
 		const Sphere &hit = spheres[id];
 		float3 p = r.orig + r.dir*t; 
 		float3 n = normalize(p - hit.pos);
+		//accucolor *= hit.albedo * max(dot(r.dir, n), 0.0f);
 		float3 nl = dot(n, r.dir) < 0 ? n : n*-1; 
-
-		accucolor += hit.albedo * max(0.0f, dot(r.dir, n));
-
-		float3 d = spheres[8].pos - p;
+		if (id != 8) {
+			accucolor *= hit.albedo * max(0.0f, dot(r.dir, -nl));
+		}
+		else {
+			accucolor += hit.albedo;
+		}
+		Sphere light = spheres[8];
+		float3 d = make_float3(light.pos.x, light.pos.y - light.radius, light.pos.z);
 		r.orig = p + nl*0.05f; // offset ray origin slightly to prevent self intersection
-		r.dir = d;
+		r.dir = normalize(d - p);
+
+		// Shade area is the point is being blocked by another object
 		if (intersect_scene(r, t, id)) { 
 			if (id != 8) { 
 				// Something blocking
-				accucolor *= shade; 
+				accucolor *= shade;
+			}
+			else {
+				
 			}
 		} 	
 	}
