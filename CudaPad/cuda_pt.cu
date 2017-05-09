@@ -4,28 +4,24 @@
 #include <iostream>
 #include "gputimer.h"
 #include <device_launch_parameters.h>
+#include <cuda.h>
 #include <cuda_runtime.h>
 #include <device_functions.h>
+#include <device_functions.h>
+#include <cuda_profiler_api.h>
 #include "cutil_math.h"
 
+
 #define M_PI 3.14159265359f  
-#define width 640
-#define height 480
+#define width 1280
+#define height 720
 #define samples 1024
 #define alpha 0.5
 
 // Other settings 
 //#define CTBRDF   // Uncomment to use the Cook-Torrance reflectance model
-//#define GLOBAL   // Uncomment to use only direct lighting
-
-
-// ===============
-// Related to direct lighting and shadowing 
-
-
-
-// ===============
-
+#define GLOBAL   // Uncomment to use only direct lighting
+#define TOTALBOUNCES 4
 
 struct Ray { 
 	float3 orig; 
@@ -56,15 +52,15 @@ struct Sphere {
 
 // SCENE
 // { float radius, { float3 position }, { float3 emission }, { float3 colour }, refl_type }
-__constant__ Sphere spheres[] = 
+__device__ Sphere spheres[] = 
 {
 	{ 1e5f, { 1e5f + 1.0f, 40.8f, 81.6f }, { 0.0f, 0.0f, 0.0f }, { 0.85f, 0.35f, 0.35f }, DIFF }, //Left
-	{ 1e5f, { -1e5f + 99.0f, 40.8f, 81.6f }, { 0.0f, 0.0f, 0.0f }, { .35f, .35f, .85f }, DIFF}, //Rght
+	{ 1e5f, { -1e5f + 99.0f, 40.8f, 81.6f }, { 0.0f, 0.0f, 0.0f }, { .35f, .35f, .85f }, SPEC}, //Rght
 	{ 1e5f, { 50.0f, 40.8f, 1e5f }, { 0.0f, 0.0f, 0.0f }, { .75f, .75f, .75f }, DIFF }, //Back
 	{ 1e5f, { 50.0f, 40.8f, -1e5f + 600.0f }, { 0.0f, 0.0f, 0.0f }, { 1.00f, 1.00f, 1.00f }, DIFF }, //Frnt
 	{ 1e5f, { 50.0f, 1e5f, 81.6f }, { 0.0f, 0.0f, 0.0f }, { .75f, .75f, .75f }, DIFF }, //Botm
 	{ 1e5f, { 50.0f, -1e5f + 81.6f, 81.6f }, { 0.0f, 0.0f, 0.0f }, { .75f, .75f, .75f }, DIFF }, //Top
-	{ 16.5f, { 27.0f, 16.5f, 47.0f }, { 0.0f, 0.0f, 0.0f }, { 0.9f, 0.9f, 0.8f }, DIFF }, // small sphere 1
+	{ 16.5f, { 27.0f, 16.5f, 47.0f }, { 0.0f, 0.0f, 0.0f }, { 0.9f, 0.1f, 0.1f }, SPEC }, // small sphere 1
 	{ 16.5f, { 73.0f, 16.5f, 78.0f }, { 0.0f, 0.0f, 0.0f }, { 0.1f, 0.3f, 1.0f }, DIFF }, // small sphere 2
 	{ 600.0f, { 50.0f, 681.6f - .77f, 81.6f }, { 2.0f, 1.8f, 1.6f }, { 0.0f, 0.0f, 0.0f }, DIFF }  // Light
 };
@@ -239,9 +235,7 @@ __device__ float3 radiance(Ray &r, unsigned int *s1, unsigned int *s2)
 
 
 #else 
-	int TotalBounces = 4; 
-
-	for (int bounces = 0; bounces < TotalBounces; ++bounces) { 
+	for (int bounces = 0; bounces < TOTALBOUNCES; ++bounces) { 
 		float t ; 
 		int id = 0; 
 		// if no intersection, then return black
@@ -349,6 +343,46 @@ __global__ void render_kernel(float3* output_d)
 
 }
 
+
+// Uses the bounding box to restrict where to recalculate
+__global__ void render_dynamic_kernel(float3* output_d, float3* min, float3* max)
+{
+	__shared__ float3 color[1024];
+
+	unsigned int x = blockIdx.x * blockDim.x + threadIdx.x;
+	unsigned int y = blockIdx.y * blockDim.y + threadIdx.y;
+
+	unsigned int i = clamp((height - y - 1) * width + (blockIdx.x * blockDim.x), (unsigned int)0, (unsigned int)(width * height - 1));
+	//unsigned int i = clamp((blockIdx.x * blockDim.x), (unsigned int)0, (unsigned int)(1024));
+	//printf("current pixel: %d\n", i);
+	unsigned int s1 = x;
+	unsigned int s2 = y;
+
+	float3 look_from = make_float3(50, 52, 295.6);
+	float3 look_at = normalize(make_float3(0, -0.042612, -1));
+
+	// Set camera
+	Ray cam(look_from, look_at);
+	float3 cx = make_float3(width * .5135 / height, 0.0f, 0.0f); // ray direction offset in x direction
+	float3 cy = normalize(cross(cx, cam.dir)) * .5135; // ray direction offset in y direction (.5135 is FOV angle)
+	float3 pixel_color = make_float3(0.0f);
+
+	// Compute primary ray direction 
+	float3 d = cam.dir + cx*((.25 + x) / width - .5) + cy*((.25 + y) / height - .5);
+
+	// Calculate the pixel color at the location 
+	// TODO
+	unsigned int offset = 0;
+	color[i] = color[i] + radiance(Ray(cam.orig + d * 40, normalize(d)), &s1, &s2) * (1.0 / samples);
+	// Forced camera rays to be pushed forward to start in interior ^^
+	__syncthreads();
+
+	//printf("after radiance: %d\n", i);
+	//output_d[i] = make_float3(clamp(color[i].x, 0.0f, 1.0f), clamp(color[i].y, 0.0f, 1.0f), clamp(color[i].z, 0.0f, 1.0f));
+	output_d[i] = make_float3(0.0f, 0.0f, 0.0f);
+}
+
+
 // Clamp values to be in range [0.0, 1.0]
 inline float clamp(float x) { return x < 0.0f? 0.0f : x > 1.0f? 1.0f : x; }
 // Converts RGB float in range [0, 1] to int range [0, 255], while performing gamma correction
@@ -368,21 +402,31 @@ int main()
 	dim3 block(16, 16, 1); 
 	dim3 grid(width / block.x, height / block.y, 1); 
 
-	timer.Start();
+	cudaProfilerStart();	
 	// Launch 
-	render_kernel <<< grid, block >>> (output_d); 
+	timer.Start();
+	render_kernel <<< grid, block >>> (output_d); 	
 	cudaDeviceSynchronize();
+	timer.Stop();
+	printf("Render Kernel Processing Time: %g ms\n", timer.Elapsed());
 
+	/* TODO
+	// Launch dynamic kernel
+	timer.Start();
+	render_dynamic_kernel <<< dim3(width/1024, height/1024, 1), 1024 >>> (output_d, 0, 0);
+	cudaDeviceSynchronize();
 	timer.Stop(); 
+	printf("Dynamic Kernel Processing Time: %g ms\n", timer.Elapsed());
+	*/
 
 	cudaMemcpy(output_h, output_d, width * height * sizeof(float3), cudaMemcpyDeviceToHost);
-	printf("GPU Processing Time: %g ms\n", timer.Elapsed());
+
 
 	// Free any allocated memory on GPU
 	cudaFree(output_d); 
 
 	// Write to a ppm file 
-	FILE *myFile = fopen("pt.ppm", "w"); 
+	FILE *myFile = fopen("pt_dynamic.ppm", "w"); 
 	fprintf(myFile, "P3\n%d %d\n%d\n", width, height, 255); 
 	for (int i = 0; i < width * height; ++i) 
 	{ 
@@ -394,6 +438,8 @@ int main()
 
 	// Free allocated memory on CPU
 	delete[] output_h; 
+
+	cudaProfilerStop();
 
 	return 0;
 }
