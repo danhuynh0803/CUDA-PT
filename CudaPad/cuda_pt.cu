@@ -58,7 +58,7 @@ struct Sphere {
 
 // SCENE
 // { float radius, { float3 position }, { float3 emission }, { float3 colour }, refl_type }
-__device__ Sphere spheres[] = 
+Sphere world[] = 
 {
 	{ 1e5f, { 1e5f + 1.0f, 40.8f, 81.6f }, { 0.0f, 0.0f, 0.0f }, { 0.85f, 0.35f, 0.35f }, DIFF }, //Left
 	{ 1e5f, { -1e5f + 99.0f, 40.8f, 81.6f }, { 0.0f, 0.0f, 0.0f }, { .35f, .35f, .85f }, SPEC}, //Rght
@@ -73,7 +73,7 @@ __device__ Sphere spheres[] =
 
 
 // check speeds if done inline
-__device__ inline bool intersect_scene(const Ray &r, float &t, int &id) {
+__device__ inline bool intersect_scene(const Ray &r, float &t, int &id, Sphere* spheres) {
 	float n = sizeof(spheres)/sizeof(Sphere);  
 	float d, inf = t = FLT_MAX;
 	
@@ -193,7 +193,7 @@ __device__ float ct_brdf(const float3 norm, float3 &l, const float3 nl, unsigned
 
 
 // Radiance function, solves rendering equation
-__device__ float3 radiance(Ray &r, unsigned int *s1, unsigned int *s2)
+__device__ float3 radiance(Ray &r, unsigned int *s1, unsigned int *s2, Sphere* spheres)
 {
 	//("In radiance, at x:%d y:%d \n", *s1, *s2);
 	float3 accucolor = make_float3(0.0f, 0.0f, 0.0f);
@@ -208,7 +208,7 @@ __device__ float3 radiance(Ray &r, unsigned int *s1, unsigned int *s2)
 	for (int bounces = 0; bounces < 1; ++bounces) {
 		float t; 
 		int id = 0; 
-		if (!intersect_scene(r, t, id))
+		if (!intersect_scene(r, t, id, spheres))
 			return make_float3(0.0, 0.0f, 0.0f);
 
 		const Sphere &hit = spheres[id];
@@ -243,7 +243,7 @@ __device__ float3 radiance(Ray &r, unsigned int *s1, unsigned int *s2)
 		float t ; 
 		int id = 0; 
 		// if no intersection, then return black
-		if (!intersect_scene(r, t, id)) 
+		if (!intersect_scene(r, t, id, spheres)) 
 			return make_float3(0.0f, 0.0f, 0.0f); 		
 		// else, hit something!
 		const Sphere &hit = spheres[id]; 
@@ -311,7 +311,7 @@ __device__ float3 radiance(Ray &r, unsigned int *s1, unsigned int *s2)
 	return accucolor; 
 }
 
-__global__ void render_kernel(float3* output_d) 
+__global__ void render_kernel(float3* output_d, Sphere* spheres_d)
 {
 	unsigned int x = blockIdx.x * blockDim.x + threadIdx.x; 
 	unsigned int y = blockIdx.y * blockDim.y + threadIdx.y; 
@@ -336,7 +336,7 @@ __global__ void render_kernel(float3* output_d)
 		float3 d = cam.dir + cx*((.25 + x) / width - .5) + cy*((.25 + y) / height - .5);
 
 		// Calculate the pixel color at the location 
-		pixel_color = pixel_color + radiance(Ray(cam.orig + d * 40, normalize(d)), &s1, &s2) * (1.0 / samples);
+		pixel_color = pixel_color + radiance(Ray(cam.orig + d * 40, normalize(d)), &s1, &s2, spheres_d) * (1.0 / samples);
 		// Forced camera rays to be pushed forward to start in interior ^^
 	}
 
@@ -348,7 +348,7 @@ __global__ void render_kernel(float3* output_d)
 
 
 // Uses the bounding box to restrict where to recalculate
-__global__ void render_dynamic_kernel(float3* output_d, float3* min, float3* max)
+__global__ void render_dynamic_kernel(float3* output_d, Sphere* spheres_d, float3* min, float3* max)
 {
 	__shared__ float3 color[1024];
 
@@ -376,7 +376,7 @@ __global__ void render_dynamic_kernel(float3* output_d, float3* min, float3* max
 	// Calculate the pixel color at the location 
 	// TODO
 	unsigned int offset = 0;
-	color[i] = color[i] + radiance(Ray(cam.orig + d * 40, normalize(d)), &s1, &s2) * (1.0 / samples);
+	color[i] = color[i] + radiance(Ray(cam.orig + d * 40, normalize(d)), &s1, &s2, spheres_d) * (1.0 / samples);
 	// Forced camera rays to be pushed forward to start in interior ^^
 	__syncthreads();
 
@@ -398,9 +398,11 @@ int main()
 
 	float3* output_h = new float3[3 * width * height]; 
 	float3* output_d; 
+	Sphere* spheres_d; 
 
 	// allocate memory to gpu 
-	cudaMalloc(&output_d, 3 * width * height * sizeof(float3));
+	cudaMalloc((void**)&output_d, 3 * width * height * sizeof(float3));
+	cudaMalloc((void**)&spheres_d, 9 * sizeof(Sphere));
 
 	// specify the block and grid size for CUDA threads over SMs 
 	dim3 block(16, 16, 1); 
@@ -409,22 +411,20 @@ int main()
 	cudaProfilerStart();	
 
 	// ================= Dynamic object specifications ================== //
-	Sphere *dynamic_sphere = (Sphere*)malloc(sizeof(Sphere));  // right-side blue object will be our dynamic object 
-	float3 velocity = make_float3(0.0f, 0.2f, 0.0f);  // move sphere 0.2 in y direction
-	float delta_t = 0.5f;
+	Sphere * dynamic_sphere = &world[7];
+	float3 velocity = make_float3(0.0f, 1.0f, 0.0f);  // move sphere 1.0 m/s upwards in this case
+	float delta_t = 2.0f; // two second time lapse per frame
 
-
-	// Game loop generates 10 frames 
-	for (int i = 0; i < 1; ++i)
+	// Game loop generates multiple frames 
+	for (int i = 1; i <= 1; ++i)
 	{
 		// Move the dynamic object based on specifed time step and velocity
-		cudaMemcpy(dynamic_sphere, spheres + 7, sizeof(Sphere), cudaMemcpyDeviceToHost);
-		dynamic_sphere->pos += velocity * delta_t * i;
-		cudaMemcpy(spheres + 7, dynamic_sphere, sizeof(Sphere), cudaMemcpyHostToDevice);
+		dynamic_sphere->pos += velocity * delta_t;
+		cudaMemcpy(spheres_d, world, 9 * sizeof(Sphere), cudaMemcpyHostToDevice);
 
 		// Launch 
 		timer.Start();
-		render_kernel <<< grid, block >>> (output_d);
+		render_kernel << < grid, block >> > (output_d, spheres_d);
 		cudaDeviceSynchronize();
 		timer.Stop();
 		printf("Render Kernel Processing Time: %g ms\n", timer.Elapsed());
@@ -433,9 +433,8 @@ int main()
 
 		// Get new name for next frame
 		std::string number = std::to_string(i); 
-		std::string file_name = "../renders/pt_dynamic" + number + ".ppm";
+		std::string file_name = "renders/pt_dynamic" + number + ".ppm";
 		// Write to a ppm file 
-		printf("Before write\n");
 		FILE *myFile = fopen(file_name.c_str(), "w");
 		fprintf(myFile, "P3\n%d %d\n%d\n", width, height, 255);
 		for (int i = 0; i < width * height; ++i)
@@ -446,7 +445,6 @@ int main()
 
 		}
 		fclose(myFile);
-		printf("After write\n");
 	}
 
 	cudaProfilerStop();
@@ -454,7 +452,7 @@ int main()
 	/* TODO
 	// Launch dynamic kernel
 	timer.Start();
-	render_dynamic_kernel <<< dim3(width/1024, height/1024, 1), 1024 >>> (output_d, 0, 0);
+	render_dynamic_kernel <<< dim3(width/1024, height/1024, 1), 1024 >>> (output_d, spheres_d, 0, 0);
 	cudaDeviceSynchronize();
 	timer.Stop(); 
 	printf("Dynamic Kernel Processing Time: %g ms\n", timer.Elapsed());
@@ -463,6 +461,7 @@ int main()
 	
 	// Free any allocated memory on GPU
 	cudaFree(output_d); 
+	cudaFree(spheres_d);
 	// Free allocated memory on CPU
 	delete[] output_h; 
 	free(dynamic_sphere);
