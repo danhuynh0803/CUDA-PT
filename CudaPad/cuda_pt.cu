@@ -2,6 +2,7 @@
 // Based on smallptCUDA by Sam Lapere, 2015 
 
 #include <iostream>
+#include <string>
 #include "gputimer.h"
 #include <device_launch_parameters.h>
 #include <cuda.h>
@@ -11,10 +12,15 @@
 #include <cuda_profiler_api.h>
 #include "cutil_math.h"
 
+#ifdef __WIN32 
+#include <Windows.h>
+#else 
+#include <direct.h>
+#endif
 
 #define M_PI 3.14159265359f  
-#define width 1280
-#define height 720
+#define width 640
+#define height 480
 #define samples 1024
 #define alpha 0.5
 
@@ -29,7 +35,7 @@ struct Ray {
 	__device__ Ray(float3 _orig, float3 _dir) : orig(_orig), dir(_dir) { } 
 }; 
 
-enum Refl_t { DIFF, SPEC, REFR }; 
+enum Refl_t { DIFF, SPEC, REFR };  // TODO: Refractions not yet defined
 
 struct Sphere { 
 	float radius; 
@@ -232,8 +238,6 @@ __device__ float3 radiance(Ray &r, unsigned int *s1, unsigned int *s2)
 			}
 		} 	
 	}
-
-
 #else 
 	for (int bounces = 0; bounces < TOTALBOUNCES; ++bounces) { 
 		float t ; 
@@ -295,12 +299,11 @@ __device__ float3 radiance(Ray &r, unsigned int *s1, unsigned int *s2)
 		
 		mask *= diff_coeff * (hit.albedo * dot(d, nl)/M_PI) + (fr * (1.0 - diff_coeff)); 
 		//mask *= hit.albedo * dot(d, nl) * (diff_coeff + fr * (1.0 - diff_coeff));
-		mask *= 2;
 		// ==============
 #else 
 		mask *= hit.albedo;    // multiply with colour of object
 		mask *= dot(d, nl);  // weigh light contribution using cosine of angle between incident light and normal
-		mask *= 2;          // fudge factor
+		mask *= 2;          // fudge factor so that we can minimize the number of iterations needed
 #endif // CTBRDF or not
 	}
 
@@ -388,6 +391,7 @@ inline float clamp(float x) { return x < 0.0f? 0.0f : x > 1.0f? 1.0f : x; }
 // Converts RGB float in range [0, 1] to int range [0, 255], while performing gamma correction
 inline int toInt(float x) { return int(pow(clamp(x), 1 / 2.2) * 255 + .5); } 
 
+
 int main()
 {
 	GpuTimer timer; 
@@ -403,12 +407,49 @@ int main()
 	dim3 grid(width / block.x, height / block.y, 1); 
 
 	cudaProfilerStart();	
-	// Launch 
-	timer.Start();
-	render_kernel <<< grid, block >>> (output_d); 	
-	cudaDeviceSynchronize();
-	timer.Stop();
-	printf("Render Kernel Processing Time: %g ms\n", timer.Elapsed());
+
+	// ================= Dynamic object specifications ================== //
+	Sphere *dynamic_sphere = (Sphere*)malloc(sizeof(Sphere));  // right-side blue object will be our dynamic object 
+	float3 velocity = make_float3(0.0f, 0.2f, 0.0f);  // move sphere 0.2 in y direction
+	float delta_t = 0.5f;
+
+
+	// Game loop generates 10 frames 
+	for (int i = 0; i < 1; ++i)
+	{
+		// Move the dynamic object based on specifed time step and velocity
+		cudaMemcpy(dynamic_sphere, spheres + 7, sizeof(Sphere), cudaMemcpyDeviceToHost);
+		dynamic_sphere->pos += velocity * delta_t * i;
+		cudaMemcpy(spheres + 7, dynamic_sphere, sizeof(Sphere), cudaMemcpyHostToDevice);
+
+		// Launch 
+		timer.Start();
+		render_kernel <<< grid, block >>> (output_d);
+		cudaDeviceSynchronize();
+		timer.Stop();
+		printf("Render Kernel Processing Time: %g ms\n", timer.Elapsed());
+		// Copy the colors back to host
+		cudaMemcpy(output_h, output_d, width * height * sizeof(float3), cudaMemcpyDeviceToHost);
+
+		// Get new name for next frame
+		std::string number = std::to_string(i); 
+		std::string file_name = "../renders/pt_dynamic" + number + ".ppm";
+		// Write to a ppm file 
+		printf("Before write\n");
+		FILE *myFile = fopen(file_name.c_str(), "w");
+		fprintf(myFile, "P3\n%d %d\n%d\n", width, height, 255);
+		for (int i = 0; i < width * height; ++i)
+		{
+			fprintf(myFile, "%d %d %d ", toInt(output_h[i].x),
+				toInt(output_h[i].y),
+				toInt(output_h[i].z));
+
+		}
+		fclose(myFile);
+		printf("After write\n");
+	}
+
+	cudaProfilerStop();
 
 	/* TODO
 	// Launch dynamic kernel
@@ -419,27 +460,12 @@ int main()
 	printf("Dynamic Kernel Processing Time: %g ms\n", timer.Elapsed());
 	*/
 
-	cudaMemcpy(output_h, output_d, width * height * sizeof(float3), cudaMemcpyDeviceToHost);
-
-
+	
 	// Free any allocated memory on GPU
 	cudaFree(output_d); 
-
-	// Write to a ppm file 
-	FILE *myFile = fopen("pt_dynamic.ppm", "w"); 
-	fprintf(myFile, "P3\n%d %d\n%d\n", width, height, 255); 
-	for (int i = 0; i < width * height; ++i) 
-	{ 
-		fprintf(myFile, "%d %d %d ", toInt(output_h[i].x),
-									 toInt(output_h[i].y), 
-									 toInt(output_h[i].z));
-
-	}
-
 	// Free allocated memory on CPU
 	delete[] output_h; 
-
-	cudaProfilerStop();
+	free(dynamic_sphere);
 
 	return 0;
 }
