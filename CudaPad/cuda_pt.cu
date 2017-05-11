@@ -73,7 +73,7 @@ __device__ Sphere spheres[] =
 
 
 // check speeds if done inline
-__device__ inline bool intersect_scene(const Ray &r, float &t, int &id, Sphere* spheres) {
+__device__ inline bool intersect_scene(const Ray &r, float &t, int &id) {
 	float n = sizeof(spheres)/sizeof(Sphere);  
 	float d, inf = t = FLT_MAX;
 	
@@ -193,7 +193,7 @@ __device__ float ct_brdf(const float3 norm, float3 &l, const float3 nl, unsigned
 
 
 // Radiance function, solves rendering equation
-__device__ float3 radiance(Ray &r, unsigned int *s1, unsigned int *s2, Sphere* spheres)
+__device__ float3 radiance(Ray &r, unsigned int *s1, unsigned int *s2)
 {
 	//("In radiance, at x:%d y:%d \n", *s1, *s2);
 	float3 accucolor = make_float3(0.0f, 0.0f, 0.0f);
@@ -243,7 +243,7 @@ __device__ float3 radiance(Ray &r, unsigned int *s1, unsigned int *s2, Sphere* s
 		float t ; 
 		int id = 0; 
 		// if no intersection, then return black
-		if (!intersect_scene(r, t, id, spheres)) 
+		if (!intersect_scene(r, t, id)) 
 			return make_float3(0.0f, 0.0f, 0.0f); 		
 		// else, hit something!
 		const Sphere &hit = spheres[id]; 
@@ -311,7 +311,7 @@ __device__ float3 radiance(Ray &r, unsigned int *s1, unsigned int *s2, Sphere* s
 	return accucolor; 
 }
 
-__global__ void render_kernel(float3* output_d, Sphere* spheres_d)
+__global__ void render_kernel(float3* output_d)
 {
 	unsigned int x = blockIdx.x * blockDim.x + threadIdx.x; 
 	unsigned int y = blockIdx.y * blockDim.y + threadIdx.y; 
@@ -336,7 +336,7 @@ __global__ void render_kernel(float3* output_d, Sphere* spheres_d)
 		float3 d = cam.dir + cx*((.25 + x) / width - .5) + cy*((.25 + y) / height - .5);
 
 		// Calculate the pixel color at the location 
-		pixel_color = pixel_color + radiance(Ray(cam.orig + d * 40, normalize(d)), &s1, &s2, spheres_d) * (1.0 / samples);
+		pixel_color = pixel_color + radiance(Ray(cam.orig + d * 40, normalize(d)), &s1, &s2) * (1.0 / samples);
 		// Forced camera rays to be pushed forward to start in interior ^^
 	}
 
@@ -348,7 +348,7 @@ __global__ void render_kernel(float3* output_d, Sphere* spheres_d)
 
 
 // Uses the bounding box to restrict where to recalculate
-__global__ void render_dynamic_kernel(float3* output_d, Sphere* spheres_d, float3* min, float3* max)
+__global__ void render_dynamic_kernel(float3* output_d, float3* min, float3* max)
 {
 	__shared__ float3 color[1024];
 
@@ -376,7 +376,7 @@ __global__ void render_dynamic_kernel(float3* output_d, Sphere* spheres_d, float
 	// Calculate the pixel color at the location 
 	// TODO
 	unsigned int offset = 0;
-	color[i] = color[i] + radiance(Ray(cam.orig + d * 40, normalize(d)), &s1, &s2, spheres_d) * (1.0 / samples);
+	color[i] = color[i] + radiance(Ray(cam.orig + d * 40, normalize(d)), &s1, &s2) * (1.0 / samples);
 	// Forced camera rays to be pushed forward to start in interior ^^
 	__syncthreads();
 
@@ -437,7 +437,7 @@ int main()
 	{
 		// Launch 
 		timer.Start();
-		render_kernel << < grid, block >> > (output_d, spheres_d);
+		render_kernel <<< grid, block >>> (output_d);
 		cudaDeviceSynchronize();
 		timer.Stop();
 		printf("Render Kernel %d Time: %g ms\n", i, timer.Elapsed());
