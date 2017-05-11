@@ -392,15 +392,21 @@ inline float clamp(float x) { return x < 0.0f? 0.0f : x > 1.0f? 1.0f : x; }
 inline int toInt(float x) { return int(pow(clamp(x), 1 / 2.2) * 255 + .5); } 
 
 
+// Modified the global scene array that's allocated on GPU
+__global__ void move_sphere_kernel(int* dynamic_idx, float3* velocity, float* delta_t)
+{
+	spheres[(*dynamic_idx)].pos += (*velocity) * (*delta_t);
+}
+
 int main()
 {
 	GpuTimer timer; 
 
 	float3* output_h = new float3[3 * width * height]; 
 	float3* output_d; 
-
+	
 	// allocate memory to gpu 
-	cudaMalloc(&output_d, 3 * width * height * sizeof(float3));
+	cudaMalloc((void**)&output_d, 3 * width * height * sizeof(float3));
 
 	// specify the block and grid size for CUDA threads over SMs 
 	dim3 block(16, 16, 1); 
@@ -409,33 +415,39 @@ int main()
 	cudaProfilerStart();	
 
 	// ================= Dynamic object specifications ================== //
-	Sphere *dynamic_sphere = (Sphere*)malloc(sizeof(Sphere));  // right-side blue object will be our dynamic object 
-	float3 velocity = make_float3(0.0f, 0.2f, 0.0f);  // move sphere 0.2 in y direction
-	float delta_t = 0.5f;
+	//Sphere* dynamic_sphere = (Sphere*)malloc(sizeof(Sphere));  // right-side blue object will be our dynamic object 
+	int dynamic_sphere = 7; // right-side blue object will be our dynamic object
+	float3 velocity = make_float3(0.0f, 2.0f, 0.0f);  // move sphere 2.0 in y direction
+	float delta_t = 2.0f;
 
+	int* dynamic_idx;
+	float3* velocity_d; 
+	float* delta_t_d;
+
+	cudaMalloc((void**)&dynamic_idx, sizeof(int));
+	cudaMalloc((void**)&velocity_d, sizeof(float3));
+	cudaMalloc((void**)&delta_t_d, sizeof(float));
+
+	cudaMemcpy(dynamic_idx, &dynamic_sphere, sizeof(int), cudaMemcpyHostToDevice);
+	cudaMemcpy(velocity_d, &velocity, sizeof(float3), cudaMemcpyHostToDevice);
+	cudaMemcpy(delta_t_d, &delta_t, sizeof(float), cudaMemcpyHostToDevice);
 
 	// Game loop generates 10 frames 
-	for (int i = 0; i < 1; ++i)
+	for (int i = 1; i <= 10; ++i)
 	{
-		// Move the dynamic object based on specifed time step and velocity
-		cudaMemcpy(dynamic_sphere, spheres + 7, sizeof(Sphere), cudaMemcpyDeviceToHost);
-		dynamic_sphere->pos += velocity * delta_t * i;
-		cudaMemcpy(spheres + 7, dynamic_sphere, sizeof(Sphere), cudaMemcpyHostToDevice);
-
 		// Launch 
 		timer.Start();
 		render_kernel <<< grid, block >>> (output_d);
 		cudaDeviceSynchronize();
 		timer.Stop();
-		printf("Render Kernel Processing Time: %g ms\n", timer.Elapsed());
+		printf("Render Kernel %d Time: %g ms\n", i, timer.Elapsed());
 		// Copy the colors back to host
 		cudaMemcpy(output_h, output_d, width * height * sizeof(float3), cudaMemcpyDeviceToHost);
 
 		// Get new name for next frame
 		std::string number = std::to_string(i); 
-		std::string file_name = "../renders/pt_dynamic" + number + ".ppm";
+		std::string file_name = "renders/pt_dynamic" + number + ".ppm";
 		// Write to a ppm file 
-		printf("Before write\n");
 		FILE *myFile = fopen(file_name.c_str(), "w");
 		fprintf(myFile, "P3\n%d %d\n%d\n", width, height, 255);
 		for (int i = 0; i < width * height; ++i)
@@ -446,7 +458,8 @@ int main()
 
 		}
 		fclose(myFile);
-		printf("After write\n");
+		// Move the dynamic object based on specifed time step and velocity
+		move_sphere_kernel <<< 1, 1 >>> (dynamic_idx, velocity_d, delta_t_d);
 	}
 
 	cudaProfilerStop();
@@ -463,9 +476,13 @@ int main()
 	
 	// Free any allocated memory on GPU
 	cudaFree(output_d); 
+	cudaFree(dynamic_idx);
+	cudaFree(velocity_d);
+	cudaFree(delta_t_d);
+
 	// Free allocated memory on CPU
 	delete[] output_h; 
-	free(dynamic_sphere);
+	
 
 	return 0;
 }
