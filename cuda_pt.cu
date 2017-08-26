@@ -18,8 +18,8 @@
 #endif
 
 #define M_PI 3.14159265359f  
-#define width 640
-#define height 480
+#define width 1280
+#define height 720 
 #define samples 1024
 #define alpha 0.5
 
@@ -60,13 +60,13 @@ struct Sphere {
 __device__ Sphere spheres[] = 
 {
 	{ 1e5f, { 1e5f + 1.0f, 40.8f, 81.6f }, { 0.0f, 0.0f, 0.0f }, { 0.85f, 0.35f, 0.35f }, DIFF }, //Left
-	{ 1e5f, { -1e5f + 99.0f, 40.8f, 81.6f }, { 0.0f, 0.0f, 0.0f }, { .35f, .35f, .85f }, SPEC}, //Rght
+	{ 1e5f, { -1e5f + 99.0f, 40.8f, 81.6f }, { 0.0f, 0.0f, 0.0f }, { .35f, .35f, .85f }, DIFF}, //Right
 	{ 1e5f, { 50.0f, 40.8f, 1e5f }, { 0.0f, 0.0f, 0.0f }, { .75f, .75f, .75f }, DIFF }, //Back
 	{ 1e5f, { 50.0f, 40.8f, -1e5f + 600.0f }, { 0.0f, 0.0f, 0.0f }, { 1.00f, 1.00f, 1.00f }, DIFF }, //Frnt
 	{ 1e5f, { 50.0f, 1e5f, 81.6f }, { 0.0f, 0.0f, 0.0f }, { .75f, .75f, .75f }, DIFF }, //Botm
 	{ 1e5f, { 50.0f, -1e5f + 81.6f, 81.6f }, { 0.0f, 0.0f, 0.0f }, { .75f, .75f, .75f }, DIFF }, //Top
-	{ 16.5f, { 27.0f, 16.5f, 47.0f }, { 0.0f, 0.0f, 0.0f }, { 0.9f, 0.1f, 0.1f }, SPEC }, // small sphere 1
-	{ 16.5f, { 73.0f, 16.5f, 78.0f }, { 0.0f, 0.0f, 0.0f }, { 0.1f, 0.3f, 1.0f }, DIFF }, // small sphere 2
+	{ 16.5f, { 27.0f, 16.5f, 47.0f }, { 0.0f, 0.0f, 0.0f }, { 0.9f, 0.1f, 0.1f }, DIFF }, // small sphere 1
+	{ 16.5f, { 73.0f, 16.5f, 78.0f }, { 0.0f, 0.0f, 0.0f }, { 0.1f, 0.3f, 1.0f }, SPEC }, // small sphere 2
 	{ 600.0f, { 50.0f, 681.6f - .77f, 81.6f }, { 2.0f, 1.8f, 1.6f }, { 0.0f, 0.0f, 0.0f }, DIFF }  // Light
 };
 
@@ -436,8 +436,9 @@ int main()
 	cudaMemcpy(velocity_d, &velocity, sizeof(float3), cudaMemcpyHostToDevice);
 	cudaMemcpy(delta_t_d, &delta_t, sizeof(float), cudaMemcpyHostToDevice);
 
-	// Render loop generates 10 frames (seperate image files)
-	for (int i = 1; i <= 10; ++i)
+	// Render loop generates frames (seperate image files)
+    int frames = 1;
+	for (int i = 1; i <= frames; ++i)
 	{
 		// Launch 
 		timer.Start();
