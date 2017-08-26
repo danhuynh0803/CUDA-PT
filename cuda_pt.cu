@@ -1,7 +1,7 @@
-// (Attempting) pbr pt in CUDA using the Cook-Torrance model by Danny Huynh, 2017
-// Based on smallptCUDA by Sam Lapere, 2015 
+// PBR pt in CUDA using the Cook-Torrance model by Danny Huynh, 2017 (modified for simple animations)
 
 #include <iostream>
+#include <string>
 #include "gputimer.h"
 #include <device_launch_parameters.h>
 #include <cuda.h>
@@ -11,10 +11,15 @@
 #include <cuda_profiler_api.h>
 #include "cutil_math.h"
 
+#ifdef __WIN32 
+#include <Windows.h>
+#else 
+#include <direct.h>
+#endif
 
 #define M_PI 3.14159265359f  
-#define width 1280
-#define height 720
+#define width 640
+#define height 480
 #define samples 1024
 #define alpha 0.5
 
@@ -29,7 +34,7 @@ struct Ray {
 	__device__ Ray(float3 _orig, float3 _dir) : orig(_orig), dir(_dir) { } 
 }; 
 
-enum Refl_t { DIFF, SPEC, REFR }; 
+enum Refl_t { DIFF, SPEC, REFR };  // TODO: Refractions not yet defined
 
 struct Sphere { 
 	float radius; 
@@ -202,7 +207,7 @@ __device__ float3 radiance(Ray &r, unsigned int *s1, unsigned int *s2)
 	for (int bounces = 0; bounces < 1; ++bounces) {
 		float t; 
 		int id = 0; 
-		if (!intersect_scene(r, t, id))
+		if (!intersect_scene(r, t, id, spheres))
 			return make_float3(0.0, 0.0f, 0.0f);
 
 		const Sphere &hit = spheres[id];
@@ -232,8 +237,6 @@ __device__ float3 radiance(Ray &r, unsigned int *s1, unsigned int *s2)
 			}
 		} 	
 	}
-
-
 #else 
 	for (int bounces = 0; bounces < TOTALBOUNCES; ++bounces) { 
 		float t ; 
@@ -295,12 +298,11 @@ __device__ float3 radiance(Ray &r, unsigned int *s1, unsigned int *s2)
 		
 		mask *= diff_coeff * (hit.albedo * dot(d, nl)/M_PI) + (fr * (1.0 - diff_coeff)); 
 		//mask *= hit.albedo * dot(d, nl) * (diff_coeff + fr * (1.0 - diff_coeff));
-		mask *= 2;
 		// ==============
 #else 
 		mask *= hit.albedo;    // multiply with colour of object
 		mask *= dot(d, nl);  // weigh light contribution using cosine of angle between incident light and normal
-		mask *= 2;          // fudge factor
+		mask *= 2;          // fudge factor so that we can minimize the number of iterations needed
 #endif // CTBRDF or not
 	}
 
@@ -308,7 +310,7 @@ __device__ float3 radiance(Ray &r, unsigned int *s1, unsigned int *s2)
 	return accucolor; 
 }
 
-__global__ void render_kernel(float3* output_d) 
+__global__ void render_kernel(float3* output_d)
 {
 	unsigned int x = blockIdx.x * blockDim.x + threadIdx.x; 
 	unsigned int y = blockIdx.y * blockDim.y + threadIdx.y; 
@@ -388,6 +390,13 @@ inline float clamp(float x) { return x < 0.0f? 0.0f : x > 1.0f? 1.0f : x; }
 // Converts RGB float in range [0, 1] to int range [0, 255], while performing gamma correction
 inline int toInt(float x) { return int(pow(clamp(x), 1 / 2.2) * 255 + .5); } 
 
+
+// Modified the global scene array that's allocated on GPU
+__global__ void move_sphere_kernel(int* dynamic_idx, float3* velocity, float* delta_t)
+{
+	spheres[(*dynamic_idx)].pos += (*velocity) * (*delta_t);
+}
+
 int main()
 {
 	GpuTimer timer; 
@@ -396,50 +405,78 @@ int main()
 	float3* output_d; 
 
 	// allocate memory to gpu 
-	cudaMalloc(&output_d, 3 * width * height * sizeof(float3));
+	cudaMalloc((void**)&output_d, 3 * width * height * sizeof(float3));
 
 	// specify the block and grid size for CUDA threads over SMs 
 	dim3 block(16, 16, 1); 
 	dim3 grid(width / block.x, height / block.y, 1); 
 
 	cudaProfilerStart();	
-	// Launch 
-	timer.Start();
-	render_kernel <<< grid, block >>> (output_d); 	
-	cudaDeviceSynchronize();
-	timer.Stop();
-	printf("Render Kernel Processing Time: %g ms\n", timer.Elapsed());
 
-	/* TODO
-	// Launch dynamic kernel
-	timer.Start();
-	render_dynamic_kernel <<< dim3(width/1024, height/1024, 1), 1024 >>> (output_d, 0, 0);
-	cudaDeviceSynchronize();
-	timer.Stop(); 
-	printf("Dynamic Kernel Processing Time: %g ms\n", timer.Elapsed());
-	*/
+	/* ================= Dynamic object specifications ================== 
+	 * Variables: 
+	 *	dynamic_sphere: the index of the object that will be given a velocity in the scene
+	 *	velocity: the speed at which the dynamic object is to move. A float3 (x, y, z)
+	 *	delta_t: the time lapse per frame. 
+	 */
+	int dynamic_sphere = 7; 
+	float3 velocity = make_float3(-2.0f, 2.0f, 0.0f);  
+	float delta_t = 1.0f; 
 
-	cudaMemcpy(output_h, output_d, width * height * sizeof(float3), cudaMemcpyDeviceToHost);
+	// For the move kernel
+	int* dynamic_idx;
+	float3* velocity_d; 
+	float* delta_t_d;
 
+	cudaMalloc((void**)&dynamic_idx, sizeof(int));
+	cudaMalloc((void**)&velocity_d, sizeof(float3));
+	cudaMalloc((void**)&delta_t_d, sizeof(float));
 
-	// Free any allocated memory on GPU
-	cudaFree(output_d); 
+	cudaMemcpy(dynamic_idx, &dynamic_sphere, sizeof(int), cudaMemcpyHostToDevice);
+	cudaMemcpy(velocity_d, &velocity, sizeof(float3), cudaMemcpyHostToDevice);
+	cudaMemcpy(delta_t_d, &delta_t, sizeof(float), cudaMemcpyHostToDevice);
 
-	// Write to a ppm file 
-	FILE *myFile = fopen("pt_dynamic.ppm", "w"); 
-	fprintf(myFile, "P3\n%d %d\n%d\n", width, height, 255); 
-	for (int i = 0; i < width * height; ++i) 
-	{ 
-		fprintf(myFile, "%d %d %d ", toInt(output_h[i].x),
-									 toInt(output_h[i].y), 
-									 toInt(output_h[i].z));
+	// Render loop generates 10 frames (seperate image files)
+	for (int i = 1; i <= 10; ++i)
+	{
+		// Launch 
+		timer.Start();
+		render_kernel <<< grid, block >>> (output_d);
+		//render_dynamic_kernel << < dim3(width / 1024, height / 1024, 1), 1024 >> > (output_d, spheres_d, 0, 0); // NOT WORKING PROPERLY
+		cudaDeviceSynchronize();
+		timer.Stop();
+		printf("Render Kernel %d Time: %g ms\n", i, timer.Elapsed());
+		// Copy the colors back to host
+		cudaMemcpy(output_h, output_d, width * height * sizeof(float3), cudaMemcpyDeviceToHost);
 
+		// Get new name for next frame
+		std::string number = std::to_string(i); 
+		std::string file_name = "pt_dynamic" + number + ".ppm";
+		// Write to a ppm file 
+		FILE *myFile = fopen(file_name.c_str(), "w");
+		fprintf(myFile, "P3\n%d %d\n%d\n", width, height, 255);
+		for (int i = 0; i < width * height; ++i)
+		{
+			fprintf(myFile, "%d %d %d ", toInt(output_h[i].x),
+				toInt(output_h[i].y),
+				toInt(output_h[i].z));
+
+		}
+		fclose(myFile);
+		// Move the dynamic object based on specifed time step and velocity
+		move_sphere_kernel <<< 1, 1 >>> (dynamic_idx, velocity_d, delta_t_d);
 	}
 
+	cudaProfilerStop();
+	
+	// Free any allocated memory on GPU
+	cudaFree(output_d); 
+	cudaFree(dynamic_idx);
+	cudaFree(velocity_d);
+	cudaFree(delta_t_d);
 	// Free allocated memory on CPU
 	delete[] output_h; 
-
-	cudaProfilerStop();
+	
 
 	return 0;
 }
