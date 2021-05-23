@@ -9,5 +9,5 @@ Dependencies: This project requires just the two header files: cutil_math.h and 
 Output: By default, 10 frames will be produced titled "pt_dynamic#.ppm" 
 The frames are rendered in ascending order starting at 1. 
 
-
-
+## Sample Render (1024x720):
+![SampleCornellBox](https://imgur.com/a/yJwQg3G)
